@@ -18,19 +18,29 @@
 #define S2S_SD_H
 
 #include <stdint.h>
+#include "bsp.h"
+#include "device.h"
 
 #define SD_SECTOR_SIZE 512
 
 typedef struct
 {
+	S2S_Device dev;
+
+	uint8_t boardCfg[S2S_CFG_SIZE] S2S_DMA_ALIGN;
+
+	S2S_Target targets[S2S_MAX_TARGETS];
+
 	int version; // SDHC = version 2.
 	uint32_t capacity; // in 512 byte blocks
 
 	uint8_t csd[16]; // Unparsed CSD
 	uint8_t cid[16]; // Unparsed CID
-} SdDevice;
+} SdCard;
 
-extern SdDevice sdDev;
+extern SdCard sdCard; // TODO move to .c file
+
+extern S2S_Device* sdDevice;
 
 int sdInit(void);
 

@@ -356,7 +356,7 @@ static void doModeSense(
 		scsiDev.data[idx++] = 0; // reserved
 
 		// Block length
-		uint32_t bytesPerSector = scsiDev.target->liveCfg.bytesPerSector;
+		uint32_t bytesPerSector = scsiDev.target->state.bytesPerSector;
 		scsiDev.data[idx++] = bytesPerSector >> 16;
 		scsiDev.data[idx++] = bytesPerSector >> 8;
 		scsiDev.data[idx++] = bytesPerSector & 0xFF;
@@ -405,7 +405,7 @@ static void doModeSense(
 			scsiDev.data[idx+11] = sectorsPerTrack & 0xFF;
 
 			// Fill out the configured bytes-per-sector
-			uint32_t bytesPerSector = scsiDev.target->liveCfg.bytesPerSector;
+			uint32_t bytesPerSector = scsiDev.target->state.bytesPerSector;
 			scsiDev.data[idx+12] = bytesPerSector >> 8;
 			scsiDev.data[idx+13] = bytesPerSector & 0xFF;
 		}
@@ -439,8 +439,9 @@ static void doModeSense(
 			uint32_t sector;
 			LBA2CHS(
 				getScsiCapacity(
+					scsiDev.target->device,
 					scsiDev.target->cfg->sdSectorStart,
-					scsiDev.target->liveCfg.bytesPerSector,
+					scsiDev.target->state.bytesPerSector,
 					scsiDev.target->cfg->scsiSectors),
 				&cyl,
 				&head,
@@ -547,8 +548,8 @@ static void doModeSense(
 		// Unknown Page Code
 		pageFound = 0;
 		scsiDev.status = CHECK_CONDITION;
-		scsiDev.target->sense.code = ILLEGAL_REQUEST;
-		scsiDev.target->sense.asc = INVALID_FIELD_IN_CDB;
+		scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
+		scsiDev.target->state.sense.asc = INVALID_FIELD_IN_CDB;
 		scsiDev.phase = STATUS;
 	}
 	else
@@ -607,10 +608,10 @@ static void doModeSelect(void)
 			}
 			else
 			{
-				scsiDev.target->liveCfg.bytesPerSector = bytesPerSector;
+				scsiDev.target->state.bytesPerSector = bytesPerSector;
 				if (bytesPerSector != scsiDev.target->cfg->bytesPerSector)
 				{
-					s2s_configSave(scsiDev.target->targetId, bytesPerSector);
+					s2s_configSave(scsiDev.target->id, bytesPerSector);
 				}
 			}
 		}
@@ -640,10 +641,10 @@ static void doModeSelect(void)
 					goto bad;
 				}
 
-				scsiDev.target->liveCfg.bytesPerSector = bytesPerSector;
+				scsiDev.target->state.bytesPerSector = bytesPerSector;
 				if (scsiDev.cdb[1] & 1) // SP Save Pages flag
 				{
-					s2s_configSave(scsiDev.target->targetId, bytesPerSector);
+					s2s_configSave(scsiDev.target->id, bytesPerSector);
 				}
 			}
 			break;
@@ -659,8 +660,8 @@ static void doModeSelect(void)
 	goto out;
 bad:
 	scsiDev.status = CHECK_CONDITION;
-	scsiDev.target->sense.code = ILLEGAL_REQUEST;
-	scsiDev.target->sense.asc = INVALID_FIELD_IN_PARAMETER_LIST;
+	scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
+	scsiDev.target->state.sense.asc = INVALID_FIELD_IN_PARAMETER_LIST;
 
 out:
 	scsiDev.phase = STATUS;

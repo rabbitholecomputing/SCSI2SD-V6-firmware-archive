@@ -17,8 +17,8 @@
 #ifndef SCSI_H
 #define SCSI_H
 
+#include "device.h"
 #include "geometry.h"
-#include "sense.h"
 
 #include <stdint.h>
 
@@ -75,33 +75,6 @@ typedef enum
 #define MAX_SECTOR_SIZE 8192
 #define MIN_SECTOR_SIZE 64
 
-// Shadow parameters, possibly not saved to flash yet.
-// Set via Mode Select
-typedef struct
-{
-	uint16_t bytesPerSector;
-} LiveCfg;
-
-typedef struct
-{
-	uint8_t targetId;
-
-	const S2S_TargetCfg* cfg;
-
-	LiveCfg liveCfg;
-
-	ScsiSense sense;
-
-	uint16_t unitAttention; // Set to the sense qualifier key to be returned.
-
-	// Only let the reserved initiator talk to us.
-	// A 3rd party may be sending the RESERVE/RELEASE commands
-	int reservedId; // 0 -> 7 if reserved. -1 if not reserved.
-	int reserverId; // 0 -> 7 if reserved. -1 if not reserved.
-
-	uint8_t syncOffset;
-	uint8_t syncPeriod;
-} TargetState;
 
 typedef struct
 {
@@ -110,10 +83,8 @@ typedef struct
 	// 65536 bytes is the DMA limit
 	uint8_t data[MAX_SECTOR_SIZE * 8];
 
-	TargetState targets[S2S_MAX_TARGETS];
-	TargetState* target;
-	S2S_BoardCfg boardCfg;
-
+	S2S_Target* target;
+	S2S_BoardCfg boardCfg; // TODO remove
 
 	// Set to true (1) if the ATN flag was set, and we need to
 	// enter the MESSAGE_OUT phase.

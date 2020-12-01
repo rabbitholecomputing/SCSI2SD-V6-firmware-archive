@@ -28,15 +28,11 @@
 // Values for STM32F401RE
 const size_t OTP_SIZE = 512;
 const size_t OTP_BLOCKS = 16;
-const size_t OTP_BLOCK_SIZE = OTP_SIZE / OTP_BLOCKS;
+const size_t OTP_BLOCK_SIZE = 32;//OTP_SIZE / OTP_BLOCKS;
 
 const size_t OTP_BLOCK_NUM = 0;
 
-// Define some pointers for writing, but also to allow easy reading back values
 #define FLASH_OTP_BASE 0x1FFF7800
-const uint8_t *otp = (uint8_t*)(FLASH_OTP_BASE + OTP_BLOCK_NUM * OTP_BLOCK_SIZE);
-const uint32_t *otp32 = (uint32_t*)(FLASH_OTP_BASE + OTP_BLOCK_NUM * OTP_BLOCK_SIZE);
-const uint8_t *lock = (uint8_t*)(FLASH_OTP_BASE + OTP_SIZE + OTP_BLOCK_NUM);
 
 const uint32_t marker = 0x06002020;
 
@@ -58,6 +54,11 @@ void
 s2s_checkHwVersion()
 {
 	checkHwSensePins();
+
+	// Define some pointers for writing, but also to allow easy reading back values
+	const uint8_t *otp = (uint8_t*)(FLASH_OTP_BASE + OTP_BLOCK_NUM * OTP_BLOCK_SIZE);
+	const uint32_t *otp32 = (uint32_t*)(FLASH_OTP_BASE + OTP_BLOCK_NUM * OTP_BLOCK_SIZE);
+	const uint8_t *lock = (uint8_t*)(FLASH_OTP_BASE + OTP_SIZE + OTP_BLOCK_NUM);
 
 	// Write a marker to flash that can be read by dfu-util now that we know
 	// the version is correct.

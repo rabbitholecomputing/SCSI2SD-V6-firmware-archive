@@ -18,7 +18,7 @@
 #define GEOMETRY_H
 
 #include "config.h"
-// TODO #include "sd.h"
+#include "device.h"
 #define SD_SECTOR_SIZE 512
 
 typedef enum
@@ -34,6 +34,7 @@ static inline int SDSectorsPerSCSISector(uint16_t bytesPerSector)
 }
 
 uint32_t getScsiCapacity(
+	S2S_Device* device,
 	uint32_t sdSectorStart,
 	uint16_t bytesPerSector,
 	uint32_t scsiSectors);

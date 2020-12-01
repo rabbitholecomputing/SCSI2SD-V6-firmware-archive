@@ -131,8 +131,8 @@ static void enter_Status(uint8_t status)
 	scsiDev.phase = STATUS;
 
 	scsiDev.lastStatus = scsiDev.status;
-	scsiDev.lastSense = scsiDev.target->sense.code;
-	scsiDev.lastSenseASC = scsiDev.target->sense.asc;
+	scsiDev.lastSense = scsiDev.target->state.sense.code;
+	scsiDev.lastSenseASC = scsiDev.target->state.sense.asc;
 }
 
 void process_Status()
@@ -190,7 +190,7 @@ void process_Status()
 	}
 	else if (scsiDev.target->cfg->quirks == S2S_CFG_QUIRKS_OMTI)
 	{
-		scsiDev.status |= (scsiDev.target->targetId & 0x03) << 5;
+		scsiDev.status |= (scsiDev.target->id & 0x03) << 5;
 		scsiWriteByte(scsiDev.status);
 	}
 	else
@@ -199,8 +199,8 @@ void process_Status()
 	}
 
 	scsiDev.lastStatus = scsiDev.status;
-	scsiDev.lastSense = scsiDev.target->sense.code;
-	scsiDev.lastSenseASC = scsiDev.target->sense.asc;
+	scsiDev.lastSense = scsiDev.target->state.sense.code;
+	scsiDev.lastSenseASC = scsiDev.target->state.sense.asc;
 
 	// Command Complete occurs AFTER a valid status has been
 	// sent. then we go bus-free.
@@ -258,8 +258,8 @@ static void process_DataOut()
 		if (parityError &&
 			(scsiDev.boardCfg.flags & S2S_CFG_ENABLE_PARITY))
 		{
-			scsiDev.target->sense.code = ABORTED_COMMAND;
-			scsiDev.target->sense.asc = SCSI_PARITY_ERROR;
+			scsiDev.target->state.sense.code = ABORTED_COMMAND;
+			scsiDev.target->state.sense.asc = SCSI_PARITY_ERROR;
 			enter_Status(CHECK_CONDITION);
 		}
 	}
@@ -323,15 +323,11 @@ static void process_Command()
 	// http://bitsavers.trailing-edge.com/pdf/xebec/104524C_S1410Man_Aug83.pdf
 	if ((scsiDev.lun > 0) && (scsiDev.boardCfg.flags & S2S_CFG_MAP_LUNS_TO_IDS))
 	{
-		int tgtIndex;
-		for (tgtIndex = 0; tgtIndex < S2S_MAX_TARGETS; ++tgtIndex)
+		S2S_Target* lunTarget = s2s_DeviceFindByScsiId(scsiDev.lun);
+		if (lunTarget != NULL)
 		{
-			if (scsiDev.targets[tgtIndex].targetId == scsiDev.lun)
-			{
-				scsiDev.target = &scsiDev.targets[tgtIndex];
-				scsiDev.lun = 0;
-				break;
-			}
+			scsiDev.target = lunTarget;
+			scsiDev.lun = 0;
 		}
 	}
 
@@ -350,8 +346,8 @@ static void process_Command()
 	else if (parityError &&
 		(scsiDev.boardCfg.flags & S2S_CFG_ENABLE_PARITY))
 	{
-		scsiDev.target->sense.code = ABORTED_COMMAND;
-		scsiDev.target->sense.asc = SCSI_PARITY_ERROR;
+		scsiDev.target->state.sense.code = ABORTED_COMMAND;
+		scsiDev.target->state.sense.asc = SCSI_PARITY_ERROR;
 		enter_Status(CHECK_CONDITION);
 	}
 	else if ((control & 0x02) && ((control & 0x01) == 0) &&
@@ -359,8 +355,8 @@ static void process_Command()
 		likely(scsiDev.target->cfg->quirks != S2S_CFG_QUIRKS_XEBEC))
 	{
 		// FLAG set without LINK flag.
-		scsiDev.target->sense.code = ILLEGAL_REQUEST;
-		scsiDev.target->sense.asc = INVALID_FIELD_IN_CDB;
+		scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
+		scsiDev.target->state.sense.asc = INVALID_FIELD_IN_CDB;
 		enter_Status(CHECK_CONDITION);
 	}
 	else if (command == 0x12)
@@ -376,11 +372,11 @@ static void process_Command()
 		{
 			// Completely non-standard
 			allocLength = 4;
-			if (scsiDev.target->sense.code == NO_SENSE)
+			if (scsiDev.target->state.sense.code == NO_SENSE)
 				scsiDev.data[0] = 0;
-			else if (scsiDev.target->sense.code == ILLEGAL_REQUEST)
+			else if (scsiDev.target->state.sense.code == ILLEGAL_REQUEST)
 				scsiDev.data[0] = 0x20; // Illegal command
-			else if (scsiDev.target->sense.code == NOT_READY)
+			else if (scsiDev.target->state.sense.code == NOT_READY)
 				scsiDev.data[0] = 0x04; // Drive not ready
 			else
 				scsiDev.data[0] = 0x11;  // Uncorrectable data error
@@ -397,7 +393,7 @@ static void process_Command()
 
 			memset(scsiDev.data, 0, 256); // Max possible alloc length
 			scsiDev.data[0] = 0xF0;
-			scsiDev.data[2] = scsiDev.target->sense.code & 0x0F;
+			scsiDev.data[2] = scsiDev.target->state.sense.code & 0x0F;
 
 			scsiDev.data[3] = transfer.lba >> 24;
 			scsiDev.data[4] = transfer.lba >> 16;
@@ -406,45 +402,45 @@ static void process_Command()
 
 			// Additional bytes if there are errors to report
 			scsiDev.data[7] = 10; // additional length
-			scsiDev.data[12] = scsiDev.target->sense.asc >> 8;
-			scsiDev.data[13] = scsiDev.target->sense.asc;
+			scsiDev.data[12] = scsiDev.target->state.sense.asc >> 8;
+			scsiDev.data[13] = scsiDev.target->state.sense.asc;
 		}
 
 		// Silently truncate results. SCSI-2 spec 8.2.14.
 		enter_DataIn(allocLength);
 
 		// This is a good time to clear out old sense information.
-		scsiDev.target->sense.code = NO_SENSE;
-		scsiDev.target->sense.asc = NO_ADDITIONAL_SENSE_INFORMATION;
+		scsiDev.target->state.sense.code = NO_SENSE;
+		scsiDev.target->state.sense.asc = NO_ADDITIONAL_SENSE_INFORMATION;
 	}
 	// Some old SCSI drivers do NOT properly support
 	// unitAttention. eg. the Mac Plus would trigger a SCSI reset
 	// on receiving the unit attention response on boot, thus
 	// triggering another unit attention condition.
-	else if (scsiDev.target->unitAttention &&
+	else if (scsiDev.target->state.unitAttention &&
 		(scsiDev.boardCfg.flags & S2S_CFG_ENABLE_UNIT_ATTENTION))
 	{
-		scsiDev.target->sense.code = UNIT_ATTENTION;
-		scsiDev.target->sense.asc = scsiDev.target->unitAttention;
+		scsiDev.target->state.sense.code = UNIT_ATTENTION;
+		scsiDev.target->state.sense.asc = scsiDev.target->state.unitAttention;
 
 		// If initiator doesn't do REQUEST SENSE for the next command, then
 		// data is lost.
-		scsiDev.target->unitAttention = 0;
+		scsiDev.target->state.unitAttention = 0;
 
 		enter_Status(CHECK_CONDITION);
 	}
 	else if (scsiDev.lun)
 	{
-		scsiDev.target->sense.code = ILLEGAL_REQUEST;
-		scsiDev.target->sense.asc = LOGICAL_UNIT_NOT_SUPPORTED;
+		scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
+		scsiDev.target->state.sense.asc = LOGICAL_UNIT_NOT_SUPPORTED;
 		enter_Status(CHECK_CONDITION);
 	}
 	else if (command == 0x17 || command == 0x16)
 	{
 		doReserveRelease();
 	}
-	else if ((scsiDev.target->reservedId >= 0) &&
-		(scsiDev.target->reservedId != scsiDev.initiatorId))
+	else if ((scsiDev.target->state.reservedId >= 0) &&
+		(scsiDev.target->state.reservedId != scsiDev.initiatorId))
 	{
 		enter_Status(CONFLICT);
 	}
@@ -485,8 +481,8 @@ static void process_Command()
 	}
 	else if (!scsiModeCommand() && !scsiVendorCommand())
 	{
-		scsiDev.target->sense.code = ILLEGAL_REQUEST;
-		scsiDev.target->sense.asc = INVALID_COMMAND_OPERATION_CODE;
+		scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
+		scsiDev.target->state.sense.asc = INVALID_COMMAND_OPERATION_CODE;
 		enter_Status(CHECK_CONDITION);
 	}
 
@@ -506,25 +502,25 @@ static void doReserveRelease()
 	uint8_t command = scsiDev.cdb[0];
 
 	int canRelease =
-		(!thirdPty && (scsiDev.initiatorId == scsiDev.target->reservedId)) ||
+		(!thirdPty && (scsiDev.initiatorId == scsiDev.target->state.reservedId)) ||
 			(thirdPty &&
-				(scsiDev.target->reserverId == scsiDev.initiatorId) &&
-				(scsiDev.target->reservedId == thirdPtyId)
+				(scsiDev.target->state.reserverId == scsiDev.initiatorId) &&
+				(scsiDev.target->state.reservedId == thirdPtyId)
 			);
 
 	if (extentReservation)
 	{
 		// Not supported.
-		scsiDev.target->sense.code = ILLEGAL_REQUEST;
-		scsiDev.target->sense.asc = INVALID_FIELD_IN_CDB;
+		scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
+		scsiDev.target->state.sense.asc = INVALID_FIELD_IN_CDB;
 		enter_Status(CHECK_CONDITION);
 	}
 	else if (command == 0x17) // release
 	{
-		if ((scsiDev.target->reservedId < 0) || canRelease)
+		if ((scsiDev.target->state.reservedId < 0) || canRelease)
 		{
-			scsiDev.target->reservedId = -1;
-			scsiDev.target->reserverId = -1;
+			scsiDev.target->state.reservedId = -1;
+			scsiDev.target->state.reserverId = -1;
 		}
 		else
 		{
@@ -533,16 +529,16 @@ static void doReserveRelease()
 	}
 	else // assume reserve.
 	{
-		if ((scsiDev.target->reservedId < 0) || canRelease)
+		if ((scsiDev.target->state.reservedId < 0) || canRelease)
 		{
-			scsiDev.target->reserverId = scsiDev.initiatorId;
+			scsiDev.target->state.reserverId = scsiDev.initiatorId;
 			if (thirdPty)
 			{
-				scsiDev.target->reservedId = thirdPtyId;
+				scsiDev.target->state.reservedId = thirdPtyId;
 			}
 			else
 			{
-				scsiDev.target->reservedId = scsiDev.initiatorId;
+				scsiDev.target->state.reservedId = scsiDev.initiatorId;
 			}
 		}
 		else
@@ -571,21 +567,28 @@ static void scsiReset()
 
 	if (scsiDev.target)
 	{
-		if (scsiDev.target->unitAttention != POWER_ON_RESET)
+		if (scsiDev.target->state.unitAttention != POWER_ON_RESET)
 		{
-			scsiDev.target->unitAttention = SCSI_BUS_RESET;
+			scsiDev.target->state.unitAttention = SCSI_BUS_RESET;
 		}
-		scsiDev.target->reservedId = -1;
-		scsiDev.target->reserverId = -1;
-		scsiDev.target->sense.code = NO_SENSE;
-		scsiDev.target->sense.asc = NO_ADDITIONAL_SENSE_INFORMATION;
+		scsiDev.target->state.reservedId = -1;
+		scsiDev.target->state.reserverId = -1;
+		scsiDev.target->state.sense.code = NO_SENSE;
+		scsiDev.target->state.sense.asc = NO_ADDITIONAL_SENSE_INFORMATION;
 	}
 	scsiDev.target = NULL;
 
-	for (int i = 0; i < S2S_MAX_TARGETS; ++i)
+	int deviceCount;
+	S2S_Device* allDevices = s2s_GetDevices(&deviceCount);
+	for (int devIdx = 0; devIdx < deviceCount; ++devIdx)
 	{
-		scsiDev.targets[i].syncOffset = 0;
-		scsiDev.targets[i].syncPeriod = 0;
+		int targetCount;
+		S2S_Target* allTargets = allDevices[devIdx].getTargets(allDevices + devIdx, &targetCount);
+		for (int i = 0; i < targetCount; ++i)
+		{
+			allTargets[i].state.syncOffset = 0;
+			allTargets[i].state.syncPeriod = 0;
+		}
 	}
 	scsiDev.minSyncPeriod = 0;
 
@@ -659,16 +662,7 @@ static void process_SelectionPhase()
 		selStatus = scsiDev.selFlag;
 	}
 
-	int tgtIndex;
-	TargetState* target = NULL;
-	for (tgtIndex = 0; tgtIndex < S2S_MAX_TARGETS; ++tgtIndex)
-	{
-		if (scsiDev.targets[tgtIndex].targetId == (selStatus & 7))
-		{
-			target = &scsiDev.targets[tgtIndex];
-			break;
-		}
-	}
+	S2S_Target* target = s2s_DeviceFindByScsiId(selStatus & 7);
 	if ((target != NULL) && (selStatus & 0x40))
 	{
 		// We've been selected!
@@ -694,7 +688,7 @@ static void process_SelectionPhase()
 		// controllers don't generate parity bits.
 		if (!scsiDev.atnFlag)
 		{
-			target->unitAttention = 0;
+			target->state.unitAttention = 0;
 			scsiDev.compatMode = COMPAT_SCSI1;
 		}
 		else if (!(scsiDev.boardCfg.flags & S2S_CFG_ENABLE_SCSI2))
@@ -788,15 +782,15 @@ static void process_MessageOut()
 
 		scsiDiskReset();
 
-		scsiDev.target->unitAttention = SCSI_BUS_RESET;
+		scsiDev.target->state.unitAttention = SCSI_BUS_RESET;
 
 		// ANY initiator can reset the reservation state via this message.
-		scsiDev.target->reservedId = -1;
-		scsiDev.target->reserverId = -1;
+		scsiDev.target->state.reservedId = -1;
+		scsiDev.target->state.reserverId = -1;
 
 		// Cancel any sync negotiation
-		scsiDev.target->syncOffset = 0;
-		scsiDev.target->syncPeriod = 0;
+		scsiDev.target->state.syncOffset = 0;
+		scsiDev.target->state.syncPeriod = 0;
 
 		enter_BusFree();
 	}
@@ -823,8 +817,8 @@ static void process_MessageOut()
 
 		if (wasNeedSyncNegotiationAck)
 		{
-			scsiDev.target->syncOffset = 0;
-			scsiDev.target->syncPeriod = 0;
+			scsiDev.target->state.syncOffset = 0;
+			scsiDev.target->state.syncPeriod = 0;
 		}
 	}
 	else if (scsiDev.msgOut == 0x08)
@@ -839,8 +833,8 @@ static void process_MessageOut()
 
 		if (wasNeedSyncNegotiationAck)
 		{
-			scsiDev.target->syncOffset = 0;
-			scsiDev.target->syncPeriod = 0;
+			scsiDev.target->state.syncOffset = 0;
+			scsiDev.target->state.syncPeriod = 0;
 		}
 	}
 	else if (scsiDev.msgOut & 0x80) // 0x80 -> 0xFF
@@ -890,13 +884,13 @@ static void process_MessageOut()
 			scsiWrite(WDTR, sizeof(WDTR));
 
 			// SDTR becomes invalidated.
-			scsiDev.target->syncOffset = 0;
-			scsiDev.target->syncPeriod = 0;
+			scsiDev.target->state.syncOffset = 0;
+			scsiDev.target->state.syncPeriod = 0;
 		}
 		else if (extmsg[0] == 1 && msgLen == 3) // Synchronous data request
 		{
-			int oldPeriod = scsiDev.target->syncPeriod;
-			int oldOffset = scsiDev.target->syncOffset;
+			int oldPeriod = scsiDev.target->state.syncPeriod;
+			int oldOffset = scsiDev.target->state.syncOffset;
 
 			int transferPeriod = extmsg[1];
 			int offset = extmsg[2];
@@ -918,10 +912,10 @@ static void process_MessageOut()
 				((scsiDev.boardCfg.scsiSpeed != S2S_CFG_SPEED_NoLimit) &&
 					(scsiDev.boardCfg.scsiSpeed <= S2S_CFG_SPEED_ASYNC_50)))
 			{
-				scsiDev.target->syncOffset = 0;
-				scsiDev.target->syncPeriod = 0;
+				scsiDev.target->state.syncOffset = 0;
+				scsiDev.target->state.syncPeriod = 0;
 			} else {
-				scsiDev.target->syncOffset = offset <= 15 ? offset : 15;
+				scsiDev.target->state.syncOffset = offset <= 15 ? offset : 15;
 				// FAST20 / 50ns / 20MHz is disabled for now due to
 				// data corruption while reading data. We can count the
 				// ACK's correctly, but can't save the data to a register
@@ -929,39 +923,39 @@ static void process_MessageOut()
 				if ((scsiDev.boardCfg.scsiSpeed == S2S_CFG_SPEED_TURBO) &&
 					(transferPeriod <= 16))
 				{
-					scsiDev.target->syncPeriod = 16; // 15.6MB/s
+					scsiDev.target->state.syncPeriod = 16; // 15.6MB/s
 				}
 				else if (scsiDev.boardCfg.scsiSpeed == S2S_CFG_SPEED_TURBO)
 				{
-					scsiDev.target->syncPeriod = transferPeriod;
+					scsiDev.target->state.syncPeriod = transferPeriod;
 				}
 				else if (transferPeriod <= 25 &&
 					((scsiDev.boardCfg.scsiSpeed == S2S_CFG_SPEED_NoLimit) ||
 						(scsiDev.boardCfg.scsiSpeed >= S2S_CFG_SPEED_SYNC_10)))
 				{
-					scsiDev.target->syncPeriod = 25; // 100ns, 10MB/s
+					scsiDev.target->state.syncPeriod = 25; // 100ns, 10MB/s
 
 				} else if (transferPeriod < 50 &&
 					((scsiDev.boardCfg.scsiSpeed == S2S_CFG_SPEED_NoLimit) ||
 						(scsiDev.boardCfg.scsiSpeed >= S2S_CFG_SPEED_SYNC_10)))
 				{
-					scsiDev.target->syncPeriod = transferPeriod;
+					scsiDev.target->state.syncPeriod = transferPeriod;
 				} else if (transferPeriod >= 50)
 				{
-					scsiDev.target->syncPeriod = transferPeriod;
+					scsiDev.target->state.syncPeriod = transferPeriod;
 				} else {
-					scsiDev.target->syncPeriod = 50;
+					scsiDev.target->state.syncPeriod = 50;
 				}
 			}
 
 			if (transferPeriod != oldPeriod ||
-				scsiDev.target->syncPeriod != oldPeriod ||
+				scsiDev.target->state.syncPeriod != oldPeriod ||
 				offset != oldOffset ||
-				scsiDev.target->syncOffset != oldOffset ||
+				scsiDev.target->state.syncOffset != oldOffset ||
 				!wasNeedSyncNegotiationAck) // Don't get into infinite loops negotiating.
 			{
 				scsiEnterPhase(MESSAGE_IN);
-				uint8_t SDTR[] = {0x01, 0x03, 0x01, scsiDev.target->syncPeriod, scsiDev.target->syncOffset};
+				uint8_t SDTR[] = {0x01, 0x03, 0x01, scsiDev.target->state.syncPeriod, scsiDev.target->state.syncOffset};
 				scsiWrite(SDTR, sizeof(SDTR));
 				scsiDev.needSyncNegotiationAck = 1; // Check if this message is rejected.
 				scsiDev.sdUnderrunCount = 0;  // reset counter, may work now.
@@ -1133,145 +1127,34 @@ void scsiInit()
 	scsiDev.hostSpeedKBs = 0;
 	scsiDev.hostSpeedMeasured = 0;
 
-	int i;
-	for (i = 0; i < S2S_MAX_TARGETS; ++i)
+	int deviceCount;
+	S2S_Device* devices = s2s_GetDevices(&deviceCount);
+	for (int deviceIdx = 0; deviceIdx < deviceCount; ++deviceIdx)
 	{
-		const S2S_TargetCfg* cfg = s2s_getConfigByIndex(i);
-		if (cfg && (cfg->scsiId & S2S_CFG_TARGET_ENABLED))
-		{
-			scsiDev.targets[i].targetId = cfg->scsiId & S2S_CFG_TARGET_ID_BITS;
-			scsiDev.targets[i].cfg = cfg;
+		int targetCount;
+		S2S_Target* targets = devices[deviceIdx].getTargets(devices + deviceIdx, &targetCount);
 
-			scsiDev.targets[i].liveCfg.bytesPerSector = cfg->bytesPerSector;
-		}
-		else
+		for (int i = 0; i < targetCount; ++i)
 		{
-			scsiDev.targets[i].targetId = 0xff;
-			scsiDev.targets[i].cfg = NULL;
-		}
-		scsiDev.targets[i].reservedId = -1;
-		scsiDev.targets[i].reserverId = -1;
-		if (firstInit)
-		{
-			scsiDev.targets[i].unitAttention = POWER_ON_RESET;
-		}
-		else
-		{
-			scsiDev.targets[i].unitAttention = PARAMETERS_CHANGED;
-		}
-		scsiDev.targets[i].sense.code = NO_SENSE;
-		scsiDev.targets[i].sense.asc = NO_ADDITIONAL_SENSE_INFORMATION;
+			S2S_TargetState* state = &(targets[i].state);
+			state->reservedId = -1;
+			state->reserverId = -1;
+			if (firstInit)
+			{
+				state->unitAttention = POWER_ON_RESET;
+			}
+			else
+			{
+				state->unitAttention = PARAMETERS_CHANGED;
+			}
+			state->sense.code = NO_SENSE;
+			state->sense.asc = NO_ADDITIONAL_SENSE_INFORMATION;
 
-		scsiDev.targets[i].syncOffset = 0;
-		scsiDev.targets[i].syncPeriod = 0;
+			state->syncOffset = 0;
+			state->syncPeriod = 0;
+		}
 	}
 	firstInit = 0;
 }
 
-/* TODO REENABLE
-void scsiDisconnect()
-{
-	scsiEnterPhase(MESSAGE_IN);
-	scsiWriteByte(0x02); // save data pointer
-	scsiWriteByte(0x04); // disconnect msg.
-
-	// For now, the caller is responsible for tracking the disconnected
-	// state, and calling scsiReconnect.
-	// Ideally the client would exit their loop and we'd implement this
-	// as part of scsiPoll
-	int phase = scsiDev.phase;
-	enter_BusFree();
-	scsiDev.phase = phase;
-}
-*/
-
-/* TODO REENABLE
-int scsiReconnect()
-{
-	int reconnected = 0;
-
-	int sel = SCSI_ReadFilt(SCSI_Filt_SEL);
-	int bsy = SCSI_ReadFilt(SCSI_Filt_BSY);
-	if (!sel && !bsy)
-	{
-		s2s_delay_us(1);
-		sel = SCSI_ReadFilt(SCSI_Filt_SEL);
-		bsy = SCSI_ReadFilt(SCSI_Filt_BSY);
-	}
-
-	if (!sel && !bsy)
-	{
-		// Arbitrate.
-		s2s_ledOn();
-		uint8_t scsiIdMask = 1 << scsiDev.target->targetId;
-		SCSI_Out_Bits_Write(scsiIdMask);
-		SCSI_Out_Ctl_Write(1); // Write bits manually.
-		SCSI_SetPin(SCSI_Out_BSY);
-
-		s2s_delay_us(3); // arbitrate delay. 2.4us.
-
-		uint8_t dbx = scsiReadDBxPins();
-		sel = SCSI_ReadFilt(SCSI_Filt_SEL);
-		if (sel || ((dbx ^ scsiIdMask) > scsiIdMask))
-		{
-			// Lost arbitration.
-			SCSI_Out_Ctl_Write(0);
-			SCSI_ClearPin(SCSI_Out_BSY);
-			s2s_ledOff();
-		}
-		else
-		{
-			// Won arbitration
-			SCSI_SetPin(SCSI_Out_SEL);
-			s2s_delay_us(1); // Bus clear + Bus settle.
-
-			// Reselection phase
-			SCSI_CTL_PHASE_Write(__scsiphase_io);
-			SCSI_Out_Bits_Write(scsiIdMask | (1 << scsiDev.initiatorId));
-			scsiDeskewDelay(); // 2 deskew delays
-			scsiDeskewDelay(); // 2 deskew delays
-			SCSI_ClearPin(SCSI_Out_BSY);
-			s2s_delay_us(1);  // Bus Settle Delay
-
-			uint32_t waitStart_ms = getTime_ms();
-			bsy = SCSI_ReadFilt(SCSI_Filt_BSY);
-			// Wait for initiator.
-			while (
-				!bsy &&
-				!scsiDev.resetFlag &&
-				(elapsedTime_ms(waitStart_ms) < 250))
-			{
-				bsy = SCSI_ReadFilt(SCSI_Filt_BSY);
-			}
-
-			if (bsy)
-			{
-				SCSI_SetPin(SCSI_Out_BSY);
-				scsiDeskewDelay(); // 2 deskew delays
-				scsiDeskewDelay(); // 2 deskew delays
-				SCSI_ClearPin(SCSI_Out_SEL);
-
-				// Prepare for the initial IDENTIFY message.
-				SCSI_Out_Ctl_Write(0);
-				scsiEnterPhase(MESSAGE_IN);
-
-				// Send identify command
-				scsiWriteByte(0x80);
-
-				scsiEnterPhase(scsiDev.phase);
-				reconnected = 1;
-			}
-			else
-			{
-				// reselect timeout.
-				SCSI_Out_Ctl_Write(0);
-				SCSI_ClearPin(SCSI_Out_SEL);
-				SCSI_CTL_PHASE_Write(0);
-				s2s_ledOff();
-			}
-		}
-	}
-	return reconnected;
-}
-*/
 

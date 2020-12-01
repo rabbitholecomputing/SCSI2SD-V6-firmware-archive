@@ -97,12 +97,12 @@ void s2s_configInit(S2S_BoardCfg* config)
 		memcpy(config, s2s_cfg, sizeof(S2S_BoardCfg));
 	}
 
-	else if ((blockDev.state & DISK_PRESENT) && sdDev.capacity)
+	else if ((blockDev.state & DISK_PRESENT) && sdCard.capacity)
 	{
 		int cfgSectors = (S2S_CFG_SIZE + 511) / 512;
 		BSP_SD_ReadBlocks_DMA(
 			(uint32_t*) &s2s_cfg[0],
-			(sdDev.capacity - cfgSectors) * 512ll,
+			(sdCard.capacity - cfgSectors) * 512ll,
 			512,
 			cfgSectors);
 
@@ -170,9 +170,9 @@ pingCommand()
 static void
 sdInfoCommand()
 {
-	uint8_t response[sizeof(sdDev.csd) + sizeof(sdDev.cid)];
-	memcpy(response, sdDev.csd, sizeof(sdDev.csd));
-	memcpy(response + sizeof(sdDev.csd), sdDev.cid, sizeof(sdDev.cid));
+	uint8_t response[sizeof(sdCard.csd) + sizeof(sdCard.cid)];
+	memcpy(response, sdCard.csd, sizeof(sdCard.csd));
+	memcpy(response + sizeof(sdCard.csd), sdCard.cid, sizeof(sdCard.cid));
 
 	hidPacket_send(response, sizeof(response));
 }
@@ -197,10 +197,10 @@ scsiDevInfoCommand()
 	{
 		FIRMWARE_VERSION >> 8,
 		FIRMWARE_VERSION & 0xff,
-		sdDev.capacity >> 24,
-		sdDev.capacity >> 16,
-		sdDev.capacity >> 8,
-		sdDev.capacity,
+		sdCard.capacity >> 24,
+		sdCard.capacity >> 16,
+		sdCard.capacity >> 8,
+		sdCard.capacity,
 		1 // useSdConfig, always true for V6.
 	};
 	hidPacket_send(response, sizeof(response));
@@ -217,8 +217,8 @@ debugCommand()
 	response[15] = scsiDev.lastSense;
 	response[16] = scsiDev.phase;
 	response[17] = *SCSI_STS_SCSI;
-	response[18] = scsiDev.target != NULL ? scsiDev.target->syncOffset : 0;
-	response[19] = scsiDev.target != NULL ? scsiDev.target->syncPeriod : 0;
+	response[18] = scsiDev.target != NULL ? scsiDev.target->state.syncOffset : 0;
+	response[19] = scsiDev.target != NULL ? scsiDev.target->state.syncPeriod : 0;
 	response[20] = scsiDev.minSyncPeriod;
 	response[21] = scsiDev.rstCount;
 	response[22] = scsiDev.selCount;
@@ -444,7 +444,7 @@ void s2s_configSave(int scsiId, uint16_t bytesPerSector)
 
 	BSP_SD_WriteBlocks_DMA(
 		(uint32_t*) &s2s_cfg[0],
-		(sdDev.capacity - S2S_CFG_SIZE) * 512ll,
+		(sdCard.capacity - S2S_CFG_SIZE) * 512ll,
 		512,
 		(S2S_CFG_SIZE + 511) / 512);
 }

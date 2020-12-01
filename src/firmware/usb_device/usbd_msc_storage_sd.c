@@ -16,8 +16,6 @@
 //	along with SCSI2SD.  If not, see <http://www.gnu.org/licenses/>.
 
 
-#include "usbd_msc_storage_sd.h"
-#include "stm32f2xx.h"
 #include "../bsp_driver_sd.h"
 #include "../bsp.h"
 #include "../disk.h"
@@ -26,8 +24,10 @@
 #include "../config.h"
 #include "../geometry.h"
 #include "../inquiry.h"
-#include "usb_device.h"
 
+#include "usbd_msc_storage_sd.h"
+#include "stm32f2xx.h"
+#include "usb_device.h"
 
 
 static int8_t s2s_usbd_storage_Init(uint8_t lun);
@@ -69,24 +69,32 @@ USBD_StorageTypeDef USBD_MSC_SD_fops =
 	s2s_usbd_storage_Inquiry
 };
 
-static const S2S_TargetCfg* getUsbConfig(uint8_t lun) {
+static const S2S_Target* getUsbTarget(uint8_t lun) {
 	int count = 0;
-	for (int i = 0; i < S2S_MAX_TARGETS; ++i)
+	int deviceCount;
+	S2S_Device* devices = s2s_GetDevices(&deviceCount);
+	for (int deviceIdx = 0; deviceIdx < deviceCount; ++deviceIdx)
 	{
-		const S2S_TargetCfg* cfg = s2s_getConfigByIndex(i);
-		if (cfg && (cfg->scsiId & S2S_CFG_TARGET_ENABLED))
+		int targetCount;
+		S2S_Target* targets = devices[deviceIdx].getTargets(devices + deviceIdx, &targetCount);
+		for (int targetIdx = 0; targetIdx < targetCount; ++targetIdx)
 		{
-			if (count == lun)
+			S2S_Target* target = targets + targetIdx;
+			if (target && (target->cfg->scsiId & S2S_CFG_TARGET_ENABLED))
 			{
-				return cfg;
-			}
-			else
-			{
-				count++;
+				if (count == lun)
+				{
+					return target;
+				}
+				else
+				{
+					count++;
+				}
 			}
 		}
 	}
-	return s2s_getConfigByIndex(0); // Fallback, try not to crash
+	int dummy;
+	return devices[0].getTargets(devices, &dummy); // Fallback, try not to crash
 }
 
 int8_t s2s_usbd_storage_Init(uint8_t lun)
@@ -96,30 +104,31 @@ int8_t s2s_usbd_storage_Init(uint8_t lun)
 
 int8_t s2s_usbd_storage_GetCapacity (uint8_t lun, uint32_t *block_num, uint16_t *block_size)
 {
-	const S2S_TargetCfg* cfg = getUsbConfig(lun);
+	const S2S_Target* target = getUsbTarget(lun);
 
 	uint32_t capacity = getScsiCapacity(
-		cfg->sdSectorStart,
-		cfg->bytesPerSector,
-		cfg->scsiSectors);
+		target->device,
+		target->cfg->sdSectorStart,
+		target->state.bytesPerSector,
+		target->cfg->scsiSectors);
 
 	*block_num  = capacity;
-	*block_size = cfg->bytesPerSector;
+	*block_size = target->state.bytesPerSector;
 	return (0);
 }
 
 uint32_t s2s_usbd_storage_Inquiry (uint8_t lun, uint8_t* buf, uint8_t maxlen)
 {
-	const S2S_TargetCfg* cfg = getUsbConfig(lun);
+	const S2S_Target* target = getUsbTarget(lun);
 
-	return s2s_getStandardInquiry(cfg, buf, maxlen);
+	return s2s_getStandardInquiry(target->cfg, buf, maxlen);
 }
 
 int8_t s2s_usbd_storage_IsReady (uint8_t lun)
 {
-	const S2S_TargetCfg* cfg = getUsbConfig(lun);
+	const S2S_Target* target = getUsbTarget(lun);
 	return (
-			cfg &&
+			target &&
 			(blockDev.state & DISK_PRESENT) &&
 			(blockDev.state & DISK_INITIALISED)
 			) ? 0 : 1; // inverse logic
@@ -137,24 +146,24 @@ int8_t s2s_usbd_storage_Read (uint8_t lun,
 		uint16_t blk_len)
 {
 	s2s_ledOn();
-	const S2S_TargetCfg* cfg = getUsbConfig(lun);
+	const S2S_Target* target = getUsbTarget(lun);
 
-	if (cfg->bytesPerSector == 512)
+	if (target->state.bytesPerSector == 512)
 	{
 		BSP_SD_ReadBlocks_DMA(
 			(uint32_t*) buf,
-			(cfg->sdSectorStart + blk_addr) * 512ll,
+			(target->cfg->sdSectorStart + blk_addr) * 512ll,
 			512,
 			blk_len);
 	}
 	else
 	{
-		int sdPerScsi = SDSectorsPerSCSISector(cfg->bytesPerSector);
-		int sdSectorNum =  cfg->sdSectorStart + (blk_addr * sdPerScsi);
+		int sdPerScsi = SDSectorsPerSCSISector(target->state.bytesPerSector);
+		int sdSectorNum =  target->cfg->sdSectorStart + (blk_addr * sdPerScsi);
 
 		for (int blk = 0; blk < blk_len; ++blk)
 		{
-			for (int i = 0; i < SDSectorsPerSCSISector(cfg->bytesPerSector); ++i)
+			for (int i = 0; i < SDSectorsPerSCSISector(target->state.bytesPerSector); ++i)
 			{
 				uint8_t partial[512] S2S_DMA_ALIGN;
 				BSP_SD_ReadBlocks_DMA(
@@ -164,16 +173,14 @@ int8_t s2s_usbd_storage_Read (uint8_t lun,
 					1);
 				sdSectorNum++;
 
-				int validBytes = cfg->bytesPerSector % SD_SECTOR_SIZE;
+				int validBytes = target->state.bytesPerSector % SD_SECTOR_SIZE;
 				if (validBytes == 0) validBytes = SD_SECTOR_SIZE;
 
 				memcpy(buf, partial, validBytes);
 
 				buf += validBytes;
 			}
-
 		}
-
 	}
 	s2s_ledOff();
 	return 0;
@@ -185,24 +192,24 @@ int8_t s2s_usbd_storage_Write (uint8_t lun,
 		uint16_t blk_len)
 {
 	s2s_ledOn();
-	const S2S_TargetCfg* cfg = getUsbConfig(lun);
+	const S2S_Target* target = getUsbTarget(lun);
 
-	if (cfg->bytesPerSector == 512)
+	if (target->state.bytesPerSector == 512)
 	{
 		BSP_SD_WriteBlocks_DMA(
 			(uint32_t*) buf,
-			(cfg->sdSectorStart + blk_addr) * 512ll,
+			(target->cfg->sdSectorStart + blk_addr) * 512ll,
 			512,
 			blk_len);
 	}
 	else
 	{
-		int sdPerScsi = SDSectorsPerSCSISector(cfg->bytesPerSector);
-		int sdSectorNum =  cfg->sdSectorStart + (blk_addr * sdPerScsi);
+		int sdPerScsi = SDSectorsPerSCSISector(target->state.bytesPerSector);
+		int sdSectorNum =  target->cfg->sdSectorStart + (blk_addr * sdPerScsi);
 
 		for (int blk = 0; blk < blk_len; ++blk)
 		{
-			for (int i = 0; i < SDSectorsPerSCSISector(cfg->bytesPerSector); ++i)
+			for (int i = 0; i < SDSectorsPerSCSISector(target->state.bytesPerSector); ++i)
 			{
 				uint8_t partial[512] S2S_DMA_ALIGN;
 				memcpy(partial, buf, 512);
@@ -214,7 +221,7 @@ int8_t s2s_usbd_storage_Write (uint8_t lun,
 					1);
 				sdSectorNum++;
 
-				int validBytes = cfg->bytesPerSector % SD_SECTOR_SIZE;
+				int validBytes = target->state.bytesPerSector % SD_SECTOR_SIZE;
 				if (validBytes == 0) validBytes = SD_SECTOR_SIZE;
 
 				buf += validBytes;
@@ -231,12 +238,19 @@ int8_t s2s_usbd_storage_Write (uint8_t lun,
 int8_t s2s_usbd_storage_GetMaxLun (void)
 {
 	int count = 0;
-	for (int i = 0; i < S2S_MAX_TARGETS; ++i)
+	int deviceCount;
+	S2S_Device* devices = s2s_GetDevices(&deviceCount);
+	for (int deviceIdx = 0; deviceIdx < deviceCount; ++deviceIdx)
 	{
-		const S2S_TargetCfg* cfg = s2s_getConfigByIndex(i);
-		if (cfg && (cfg->scsiId & S2S_CFG_TARGET_ENABLED))
+		int targetCount;
+		S2S_Target* targets = devices[deviceIdx].getTargets(devices + deviceIdx, &targetCount);
+		for (int targetIdx = 0; targetIdx < targetCount; ++targetIdx)
 		{
-			count++;
+			S2S_Target* target = targets + targetIdx;
+			if (target && (target->cfg->scsiId & S2S_CFG_TARGET_ENABLED))
+			{
+				count++;
+			}
 		}
 	}
 	return count - 1 < 0 ? 0 : count - 1;

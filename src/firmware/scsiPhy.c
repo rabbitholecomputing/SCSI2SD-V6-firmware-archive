@@ -576,17 +576,18 @@ uint32_t scsiEnterPhaseImmediate(int newPhase)
 	while (likely(!scsiDev.resetFlag) && scsiStatusACK()) {}
 
 	int oldPhase = *SCSI_CTRL_PHASE;
+	uint8_t syncOffset = scsiDev.target->state.syncOffset;
+	uint8_t syncPeriod = scsiDev.target->state.syncPeriod;
 
 	if (newPhase != oldPhase)
 	{
-		if ((newPhase == DATA_IN || newPhase == DATA_OUT) &&
-			scsiDev.target->syncOffset)
+		if ((newPhase == DATA_IN || newPhase == DATA_OUT) && syncOffset)
 		{
-			if (scsiDev.target->syncPeriod < 23)
+			if (syncPeriod < 23)
 			{
 				scsiSetTiming(SCSI_FAST20_ASSERT, SCSI_FAST20_DESKEW, SCSI_FAST20_HOLD, 1);
 			}
-			else if (scsiDev.target->syncPeriod <= 25)
+			else if (syncPeriod <= 25)
 			{
 				if (newPhase == DATA_IN)
 				{
@@ -602,26 +603,25 @@ uint32_t scsiEnterPhaseImmediate(int newPhase)
 				// Amiga A3000 OS3.9 sets period to 35 and fails with
 				// glitch == 1.
 				int glitch =
-					scsiDev.target->syncPeriod < 35 ? 1 :
-						(scsiDev.target->syncPeriod < 45 ? 2 : 5);
-				int deskew = syncDeskew(scsiDev.target->syncPeriod);
+					syncPeriod < 35 ? 1 : (syncPeriod < 45 ? 2 : 5);
+				int deskew = syncDeskew(syncPeriod);
 				int assertion;
 				if (newPhase == DATA_IN)
 				{
-					assertion = syncAssertionWrite(scsiDev.target->syncPeriod, deskew);
+					assertion = syncAssertionWrite(syncPeriod, deskew);
 				}
 				else
 				{
-					assertion = syncAssertionRead(scsiDev.target->syncPeriod);
+					assertion = syncAssertionRead(syncPeriod);
 				}
 				scsiSetTiming(
 					assertion,
 					deskew,
-					syncHold(scsiDev.target->syncPeriod),
+					syncHold(syncPeriod),
 					glitch);
 			}
 
-			*SCSI_CTRL_SYNC_OFFSET = scsiDev.target->syncOffset;
+			*SCSI_CTRL_SYNC_OFFSET = syncOffset;
 		}
 		else if (newPhase >= 0)
 		{
@@ -681,13 +681,13 @@ uint32_t scsiEnterPhaseImmediate(int newPhase)
 // theoretical speed / 2
 uint32_t s2s_getScsiRateKBs()
 {
-	if (scsiDev.target->syncOffset)
+	if (scsiDev.target->state.syncOffset)
 	{
-		if (scsiDev.target->syncPeriod < 23)
+		if (scsiDev.target->state.syncPeriod < 23)
 		{
 			return 20 / 2;
 		}
-		else if (scsiDev.target->syncPeriod <= 25)
+		else if (scsiDev.target->state.syncPeriod <= 25)
 		{
 			return 10 / 2;
 		}
@@ -695,7 +695,7 @@ uint32_t s2s_getScsiRateKBs()
 		{
 			// 1000000000 / (scsiDev.target->syncPeriod * 4) bytes per second
 			// (1000000000 / (scsiDev.target->syncPeriod * 4)) / 1000  kB/s
-			return (1000000 / (scsiDev.target->syncPeriod * 4)) / 2;
+			return (1000000 / (scsiDev.target->state.syncPeriod * 4)) / 2;
 		}
 	}
 	else

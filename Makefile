@@ -115,6 +115,7 @@ SRC = \
 	src/firmware/bsp.c \
 	src/firmware/cdrom.c \
 	src/firmware/config.c \
+	src/firmware/device.c \
 	src/firmware/disk.c \
 	src/firmware/diagnostic.c \
 	src/firmware/fpga.c \

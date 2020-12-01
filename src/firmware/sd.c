@@ -31,8 +31,22 @@
 
 #include <string.h>
 
+static const S2S_BoardCfg* sd_getBoardConfig(S2S_Device* dev);
+//static const S2S_TargetCfg* sd_findByScsiId(S2S_Device* dev, int scsiId);
+static S2S_Target* sd_getTargets(S2S_Device* dev, int* count);
+static uint32_t sd_getCapacity(S2S_Device* dev);
+
 // Global
-SdDevice sdDev;
+SdCard sdCard S2S_DMA_ALIGN = {
+		{
+			sd_getBoardConfig,
+			//sd_findByScsiId,
+			sd_getTargets,
+			sd_getCapacity
+		}
+};
+
+S2S_Device* sdDevice = &(sdCard.dev);
 
 static int sdCmdActive = 0;
 
@@ -73,8 +87,8 @@ void sdReadDMA(uint32_t lba, uint32_t sectors, uint8_t* outputBuffer)
 		scsiDiskReset();
 
 		scsiDev.status = CHECK_CONDITION;
-		scsiDev.target->sense.code = HARDWARE_ERROR;
-		scsiDev.target->sense.asc = LOGICAL_UNIT_COMMUNICATION_FAILURE;
+		scsiDev.target->state.sense.code = HARDWARE_ERROR;
+		scsiDev.target->state.sense.asc = LOGICAL_UNIT_COMMUNICATION_FAILURE;
 		scsiDev.phase = STATUS;
 	}
 	else
@@ -127,10 +141,10 @@ void sdTmpWrite(uint8_t* data, uint32_t lba, int sectors)
 
 static void sdClear()
 {
-	sdDev.version = 0;
-	sdDev.capacity = 0;
-	memset(sdDev.csd, 0, sizeof(sdDev.csd));
-	memset(sdDev.cid, 0, sizeof(sdDev.cid));
+	sdCard.version = 0;
+	sdCard.capacity = 0;
+	memset(sdCard.csd, 0, sizeof(sdCard.csd));
+	memset(sdCard.cid, 0, sizeof(sdCard.cid));
 }
 
 static int sdDoInit()
@@ -143,9 +157,9 @@ static int sdDoInit()
 	int8_t error = BSP_SD_Init();
 	if (error == MSD_OK)
 	{
-		memcpy(sdDev.csd, &SDCardInfo.SD_csd, sizeof(sdDev.csd));
-		memcpy(sdDev.cid, &SDCardInfo.SD_cid, sizeof(sdDev.cid));
-		sdDev.capacity = SDCardInfo.CardCapacity / SD_SECTOR_SIZE;
+		memcpy(sdCard.csd, &SDCardInfo.SD_csd, sizeof(sdCard.csd));
+		memcpy(sdCard.cid, &SDCardInfo.SD_cid, sizeof(sdCard.cid));
+		sdCard.capacity = SDCardInfo.CardCapacity / SD_SECTOR_SIZE;
 		blockDev.state |= DISK_PRESENT | DISK_INITIALISED;
 		result = 1;
 
@@ -181,7 +195,7 @@ static int sdDoInit()
 //bad:
 	blockDev.state &= ~(DISK_PRESENT | DISK_INITIALISED);
 
-	sdDev.capacity = 0;
+	sdCard.capacity = 0;
 
 out:
 	s2s_ledOff();
@@ -256,13 +270,13 @@ int sdInit()
 		}
 		else if (!cs && (blockDev.state & DISK_PRESENT))
 		{
-			sdDev.capacity = 0;
+			sdCard.capacity = 0;
 			blockDev.state &= ~DISK_PRESENT;
 			blockDev.state &= ~DISK_INITIALISED;
 			int i;
 			for (i = 0; i < S2S_MAX_TARGETS; ++i)
 			{
-				scsiDev.targets[i].unitAttention = PARAMETERS_CHANGED;
+				sdCard.targets[i].state.unitAttention = PARAMETERS_CHANGED;
 			}
 
 			HAL_SD_DeInit(&hsd);
@@ -273,3 +287,43 @@ int sdInit()
 	return result;
 }
 
+static const S2S_BoardCfg* sd_getBoardConfig(S2S_Device* dev)
+{
+	SdCard* sdCardDevice = (SdCard*)dev;
+
+	if ((blockDev.state & DISK_PRESENT) && sdCardDevice->capacity)
+	{
+		int cfgSectors = (S2S_CFG_SIZE + 511) / 512;
+		BSP_SD_ReadBlocks_DMA(
+			(uint32_t*) &(sdCardDevice->boardCfg[0]),
+			(sdCardDevice->capacity - cfgSectors) * 512ll,
+			512,
+			cfgSectors);
+
+		S2S_BoardCfg* cfg = (S2S_BoardCfg*) &(sdCardDevice->boardCfg[0]);
+		if (memcmp(cfg->magic, "BCFG", 4))
+		{
+			return NULL;
+		}
+		else
+		{
+			return cfg;
+		}
+	}
+
+	return NULL;
+}
+
+//static const S2S_TargetCfg* sd_findByScsiId(S2S_Device* dev, int scsiId)
+static S2S_Target* sd_getTargets(S2S_Device* dev, int* count)
+{
+	SdCard* sdCardDevice = (SdCard*)dev;
+	*count = S2S_MAX_TARGETS;
+	return sdCardDevice->targets;
+}
+
+static uint32_t sd_getCapacity(S2S_Device* dev)
+{
+	SdCard* sdCardDevice = (SdCard*)dev;
+	return sdCardDevice->capacity;
+}
