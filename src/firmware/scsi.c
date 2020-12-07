@@ -1152,6 +1152,11 @@ void scsiInit()
 
 			state->syncOffset = 0;
 			state->syncPeriod = 0;
+
+			// TODO This should probably be done in a device-specific init function.
+			targets[i].cfg = s2s_getConfigByIndex(i);
+			targets[i].id = targets[i].cfg->scsiId;
+			targets[i].device = &(devices[deviceIdx]);
 		}
 	}
 	firstInit = 0;
