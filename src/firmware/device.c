@@ -19,6 +19,24 @@
 #include "sd.h"
 
 #include <stddef.h>
+#include <string.h>
+
+int s2s_DeviceGetBoardConfig(S2S_BoardCfg* config)
+{
+	int deviceCount;
+	S2S_Device* devices = s2s_GetDevices(&deviceCount);
+	for (int deviceIdx = 0; deviceIdx < deviceCount; ++deviceIdx)
+	{
+		const S2S_BoardCfg* devCfg = devices[deviceIdx].getBoardConfig(devices + deviceIdx);
+		if (devCfg)
+		{
+			memcpy(config, devCfg, sizeof(S2S_BoardCfg));
+			return 1;
+		}
+	}
+
+	return 0;
+}
 
 S2S_Target* s2s_DeviceFindByScsiId(int scsiId)
 {
@@ -33,7 +51,7 @@ S2S_Target* s2s_DeviceFindByScsiId(int scsiId)
 			S2S_Target* target = targets + targetIdx;
 			if (target &&
 				(target->cfg->scsiId & S2S_CFG_TARGET_ENABLED) &&
-				((target->cfg->scsiId & 7) == scsiId))
+				((target->cfg->scsiId & S2S_CFG_TARGET_ID_BITS) == scsiId))
 			{
 				return target;
 			}
@@ -49,3 +67,25 @@ S2S_Device* s2s_GetDevices(int* count)
 	return sdDevice;
 }
 
+void s2s_deviceEarlyInit()
+{
+	int count;
+	S2S_Device* devices = s2s_GetDevices(&count);
+	for (int i = 0; i < count; ++i)
+	{
+		devices[i].earlyInit(&(devices[i]));
+	}
+}
+
+int s2s_pollMediaChange()
+{
+	int result = 0;
+	int count;
+	S2S_Device* devices = s2s_GetDevices(&count);
+	for (int i = 0; i < count; ++i)
+	{
+		int devResult = devices[i].pollMediaChange(&(devices[i]));
+		result = result || devResult;
+	}
+	return result;
+}

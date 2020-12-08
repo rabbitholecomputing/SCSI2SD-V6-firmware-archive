@@ -33,7 +33,6 @@
 #include "usb_device/usbd_msc_storage_sd.h"
 
 const char* Notice = "Copyright (C) 2020 Michael McMaster <michael@codesrc.com>";
-uint32_t lastSDPoll;
 
 static int isUsbStarted;
 
@@ -53,7 +52,7 @@ void mainInit()
 
 	s2s_ledInit();
 	s2s_fpgaInit();
-
+	s2s_deviceEarlyInit();
 	scsiPhyInit();
 
 	scsiDiskInit();
@@ -79,7 +78,6 @@ void mainInit()
 		++delaySeconds;
 	}
 
-	lastSDPoll = s2s_getTime_ms();
 }
 
 void mainLoop()
@@ -91,89 +89,22 @@ void mainLoop()
 	s2s_configPoll();
 	s2s_usbDevicePoll();
 
-#if 0
-	sdPoll();
-#endif
-
 	if (unlikely(scsiDev.phase == BUS_FREE))
 	{
-		if (unlikely(s2s_elapsedTime_ms(lastSDPoll) > 200))
+		if (s2s_pollMediaChange())
 		{
-			lastSDPoll = s2s_getTime_ms();
-			if (sdInit())
-			{
-				s2s_configInit(&scsiDev.boardCfg);
-				scsiPhyConfig();
-				scsiInit();
-
-				// Is a USB host connected ?
-/* TODO DEAL WITH THIS
-				if (isUsbStarted)
-				{
-					USBD_Stop(&hUsbDeviceFS);
-					s2s_delay_ms(128);
-					USBD_Start(&hUsbDeviceFS);
-				}
-*/			
-			}
-
-/* TODO DEAL WITH THIS
-			// Can we speed up the SD card ?
-			// Don't combine with the above block because that won't
-			// run if the SD card is present at startup.
-			// Don't use VBUS monitoring because that just tells us about
-			// power, which could be from a charger
-			if ((blockDev.state & DISK_PRESENT) &&
-				isUsbStarted &&
-				(scsiDev.cmdCount > 0) && // no need for speed without scsi
-				!USBD_Composite_IsConfigured(&hUsbDeviceFS) &&
-				(scsiDev.boardCfg.scsiSpeed == S2S_CFG_SPEED_TURBO))
-			{
-				if (HAL_SD_HighSpeed(&hsd) == SD_OK)
-				{
-					USBD_Stop(&hUsbDeviceFS);
-					s2s_setFastClock();
-					isUsbStarted = 0;
-				}
-			}
-
-			else if (!(blockDev.state & DISK_PRESENT) && !isUsbStarted)
-			{
-				// Good time to restart USB.
-				s2s_setNormalClock();
-				USBD_Start(&hUsbDeviceFS);
-				isUsbStarted = 1;
-			}
-	*/
-		}
-		else
-		{
-			// TODO this hurts performance significantly! Work out why __WFI()
-			// doesn't wake up immediately !
-#if 0
-			// Wait for our 1ms timer to save some power.
-			// There's an interrupt on the SEL signal to ensure we respond
-			// quickly to any SCSI commands. The selection abort time is
-			// only 250us, and new SCSI-3 controllers time-out very
-			// not long after that, so we need to ensure we wake up quickly.
-			uint32_t interruptState = __get_PRIMASK();
-			__disable_irq();
-
-			if (!*SCSI_STS_SELECTED)
-			{
-				//__WFI(); // Will wake on interrupt, regardless of mask
-			}
-			if (!interruptState)
-			{
-				__enable_irq();
-			}
-#endif
+			s2s_configInit(&scsiDev.boardCfg);
+			scsiPhyConfig();
+			scsiInit();
 		}
 	}
+#warning MOVE THIS CODE TO SD READ/WRITE METHODS
+#if 0
 	else if ((scsiDev.phase >= 0) && (blockDev.state & DISK_PRESENT))
 	{
 		// don't waste time scanning SD cards while we're doing disk IO
 		lastSDPoll = s2s_getTime_ms();
 	}
+#endif
 }
 

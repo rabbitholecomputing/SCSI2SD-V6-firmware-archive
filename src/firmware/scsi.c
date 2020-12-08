@@ -190,7 +190,7 @@ void process_Status()
 	}
 	else if (scsiDev.target->cfg->quirks == S2S_CFG_QUIRKS_OMTI)
 	{
-		scsiDev.status |= (scsiDev.target->id & 0x03) << 5;
+		scsiDev.status |= (scsiDev.target->cfg->scsiId & 0x03) << 5;
 		scsiWriteByte(scsiDev.status);
 	}
 	else
@@ -479,7 +479,7 @@ static void process_Command()
 	{
 		scsiReadBuffer();
 	}
-	else if (!scsiModeCommand() && !scsiVendorCommand())
+	else if (!scsiModeCommand(scsiDev.target->device) && !scsiVendorCommand())
 	{
 		scsiDev.target->state.sense.code = ILLEGAL_REQUEST;
 		scsiDev.target->state.sense.asc = INVALID_COMMAND_OPERATION_CODE;
@@ -1152,11 +1152,6 @@ void scsiInit()
 
 			state->syncOffset = 0;
 			state->syncPeriod = 0;
-
-			// TODO This should probably be done in a device-specific init function.
-			targets[i].cfg = s2s_getConfigByIndex(i);
-			targets[i].id = targets[i].cfg->scsiId;
-			targets[i].device = &(devices[deviceIdx]);
 		}
 	}
 	firstInit = 0;

@@ -129,15 +129,16 @@ int8_t s2s_usbd_storage_IsReady (uint8_t lun)
 	const S2S_Target* target = getUsbTarget(lun);
 	return (
 			target &&
-			(blockDev.state & DISK_PRESENT) &&
-			(blockDev.state & DISK_INITIALISED)
+			(target->device->mediaState & MEDIA_PRESENT) &&
+			(target->device->mediaState & MEDIA_INITIALISED)
 			) ? 0 : 1; // inverse logic
 }
 
 
 int8_t s2s_usbd_storage_IsWriteProtected (uint8_t lun)
 {
-	return blockDev.state & DISK_WP;
+	const S2S_Target* target = getUsbTarget(lun);
+	return target->device->mediaState & MEDIA_WP;
 }
 
 int8_t s2s_usbd_storage_Read (uint8_t lun,

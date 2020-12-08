@@ -36,18 +36,7 @@
 #include <string.h>
 
 // Global
-BlockDevice blockDev;
 Transfer transfer;
-
-static int doSdInit()
-{
-	int result = 0;
-	if (blockDev.state & DISK_PRESENT)
-	{
-		blockDev.state = blockDev.state | DISK_INITIALISED;
-	}
-	return result;
-}
 
 // Callback once all data has been read in the data out phase.
 static void doFormatUnitComplete(void)
@@ -94,9 +83,7 @@ static void doFormatUnitHeader(void)
 	if (! DSP) // disable save parameters
 	{
 		// Save the "MODE SELECT savable parameters"
-		s2s_configSave(
-			scsiDev.target->id,
-			scsiDev.target->state.bytesPerSector);
+		scsiDev.target->device->saveConfig(scsiDev.target);
 	}
 
 	if (IP)
@@ -178,7 +165,7 @@ static void doWrite(uint32_t lba, uint32_t blocks)
 
 	uint32_t bytesPerSector = scsiDev.target->state.bytesPerSector;
 
-	if (unlikely(blockDev.state & DISK_WP) ||
+	if (unlikely(scsiDev.target->device->mediaState & MEDIA_WP) ||
 		unlikely(scsiDev.target->cfg->deviceType == S2S_CFG_OPTICAL))
 
 	{
@@ -213,15 +200,6 @@ static void doWrite(uint32_t lba, uint32_t blocks)
 		// No need for single-block writes atm.  Overhead of the
 		// multi-block write is minimal.
 		transfer.multiBlock = 1;
-
-
-		// TODO uint32_t sdLBA =
-// TODO 			SCSISector2SD(
-	// TODO 			scsiDev.target->cfg->sdSectorStart,
-		// TODO 		bytesPerSector,
-			// TODO 	lba);
-		// TODO uint32_t sdBlocks = blocks * SDSectorsPerSCSISector(bytesPerSector);
-		// TODO sdWriteMultiSectorPrep(sdLBA, sdBlocks);
 	}
 }
 
@@ -308,12 +286,14 @@ static void doSeek(uint32_t lba)
 
 static int doTestUnitReady()
 {
+	MEDIA_STATE* mediaState = &(scsiDev.target->device->mediaState);
+
 	int ready = 1;
-	if (likely(blockDev.state == (DISK_STARTED | DISK_PRESENT | DISK_INITIALISED)))
+	if (likely(*mediaState == (MEDIA_STARTED | MEDIA_PRESENT | MEDIA_INITIALISED)))
 	{
 		// nothing to do.
 	}
-	else if (unlikely(!(blockDev.state & DISK_STARTED)))
+	else if (unlikely(!(*mediaState & MEDIA_STARTED)))
 	{
 		ready = 0;
 		scsiDev.status = CHECK_CONDITION;
@@ -321,7 +301,7 @@ static int doTestUnitReady()
 		scsiDev.target->state.sense.asc = LOGICAL_UNIT_NOT_READY_INITIALIZING_COMMAND_REQUIRED;
 		scsiDev.phase = STATUS;
 	}
-	else if (unlikely(!(blockDev.state & DISK_PRESENT)))
+	else if (unlikely(!(*mediaState & MEDIA_PRESENT)))
 	{
 		ready = 0;
 		scsiDev.status = CHECK_CONDITION;
@@ -329,7 +309,7 @@ static int doTestUnitReady()
 		scsiDev.target->state.sense.asc = MEDIUM_NOT_PRESENT;
 		scsiDev.phase = STATUS;
 	}
-	else if (unlikely(!(blockDev.state & DISK_INITIALISED)))
+	else if (unlikely(!(*mediaState & MEDIA_INITIALISED)))
 	{
 		ready = 0;
 		scsiDev.status = CHECK_CONDITION;
@@ -354,17 +334,21 @@ int scsiDiskCommand()
 		//int immed = scsiDev.cdb[1] & 1;
 		int start = scsiDev.cdb[4] & 1;
 
+		MEDIA_STATE* mediaState = &(scsiDev.target->device->mediaState);
 		if (start)
 		{
-			blockDev.state = blockDev.state | DISK_STARTED;
-			if (!(blockDev.state & DISK_INITIALISED))
+			*mediaState = *mediaState | MEDIA_STARTED;
+			if (!(*mediaState & MEDIA_INITIALISED))
 			{
-				doSdInit();
+				if (*mediaState & MEDIA_PRESENT)
+				{
+					*mediaState = *mediaState | MEDIA_INITIALISED;
+				}
 			}
 		}
 		else
 		{
-			blockDev.state &= ~DISK_STARTED;
+			*mediaState &= ~MEDIA_STARTED;
 		}
 	}
 	else if (unlikely(command == 0x00))
@@ -965,8 +949,5 @@ void scsiDiskReset()
 void scsiDiskInit()
 {
 	scsiDiskReset();
-
-	// Don't require the host to send us a START STOP UNIT command
-	blockDev.state = DISK_STARTED;
 }
 

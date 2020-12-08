@@ -875,8 +875,8 @@ void scsiPhyConfig()
 	uint8_t idMask = 0;
 	for (int i = 0; i < 8; ++i)
 	{
-		const S2S_TargetCfg* cfg = s2s_getConfigById(i);
-		if (cfg && (cfg->scsiId & S2S_CFG_TARGET_ENABLED))
+		const S2S_Target* tgt = s2s_DeviceFindByScsiId(i);
+		if (tgt && (tgt->cfg->scsiId & S2S_CFG_TARGET_ENABLED))
 		{
 			idMask |= (1 << i);
 		}

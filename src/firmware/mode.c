@@ -257,7 +257,12 @@ static void pageIn(int pc, int dataIdx, const uint8_t* pageData, int pageLen)
 }
 
 static void doModeSense(
-	int sixByteCmd, int dbd, int pc, int pageCode, int allocLength)
+	S2S_Device* dev,
+	int sixByteCmd,
+	int dbd,
+	int pc,
+	int pageCode,
+	int allocLength)
 {
 	////////////// Mode Parameter Header
 	////////////////////////////////////
@@ -276,14 +281,14 @@ static void doModeSense(
 		mediumType = 0; // We should support various floppy types here!
 		// Contains cache bits (0) and a Write-Protect bit.
 		deviceSpecificParam =
-			(blockDev.state & DISK_WP) ? 0x80 : 0;
+			(dev->mediaState & MEDIA_WP) ? 0x80 : 0;
 		density = 0; // reserved for direct access
 		break;
 
 	case S2S_CFG_FLOPPY_14MB:
 		mediumType = 0x1E; // 90mm/3.5"
 		deviceSpecificParam =
-			(blockDev.state & DISK_WP) ? 0x80 : 0;
+			(dev->mediaState & MEDIA_WP) ? 0x80 : 0;
 		density = 0; // reserved for direct access
 		break;
 
@@ -296,14 +301,14 @@ static void doModeSense(
 	case S2S_CFG_SEQUENTIAL:
 		mediumType = 0; // reserved
 		deviceSpecificParam =
-			(blockDev.state & DISK_WP) ? 0x80 : 0;
-		density = 0x13; // DAT Data Storage, X3B5/88-185A 
+			(dev->mediaState & MEDIA_WP) ? 0x80 : 0;
+		density = 0x13; // DAT Data Storage, X3B5/88-185A
 		break;
 
 	case S2S_CFG_MO:
         mediumType = 0x03; // Optical reversible or erasable medium
 		deviceSpecificParam =
-			(blockDev.state & DISK_WP) ? 0x80 : 0;
+			(dev->mediaState & MEDIA_WP) ? 0x80 : 0;
 		density = 0x00; // Default
 		break;
 
@@ -611,7 +616,7 @@ static void doModeSelect(void)
 				scsiDev.target->state.bytesPerSector = bytesPerSector;
 				if (bytesPerSector != scsiDev.target->cfg->bytesPerSector)
 				{
-					s2s_configSave(scsiDev.target->id, bytesPerSector);
+					scsiDev.target->device->saveConfig(scsiDev.target);
 				}
 			}
 		}
@@ -644,7 +649,7 @@ static void doModeSelect(void)
 				scsiDev.target->state.bytesPerSector = bytesPerSector;
 				if (scsiDev.cdb[1] & 1) // SP Save Pages flag
 				{
-					s2s_configSave(scsiDev.target->id, bytesPerSector);
+					scsiDev.target->device->saveConfig(scsiDev.target);
 				}
 			}
 			break;
@@ -667,7 +672,7 @@ out:
 	scsiDev.phase = STATUS;
 }
 
-int scsiModeCommand()
+int scsiModeCommand(S2S_Device* dev)
 {
 	int commandHandled = 1;
 
@@ -687,7 +692,7 @@ int scsiModeCommand()
 		// SCSI1 standard: (CCS X3T9.2/86-52)
 		// "An Allocation Length of zero indicates that no MODE SENSE data shall
 		// be transferred. This condition shall not be considered as an error."
-		doModeSense(1, dbd, pc, pageCode, allocLength);
+		doModeSense(dev, 1, dbd, pc, pageCode, allocLength);
 	}
 	else if (command == 0x5A)
 	{
@@ -698,7 +703,7 @@ int scsiModeCommand()
 		int allocLength =
 			(((uint16_t) scsiDev.cdb[7]) << 8) +
 			scsiDev.cdb[8];
-		doModeSense(0, dbd, pc, pageCode, allocLength);
+		doModeSense(dev, 0, dbd, pc, pageCode, allocLength);
 	}
 	else if (command == 0x15)
 	{

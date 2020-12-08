@@ -27,7 +27,7 @@ typedef struct
 {
 	S2S_Device dev;
 
-	uint8_t boardCfg[S2S_CFG_SIZE] S2S_DMA_ALIGN;
+	uint8_t cfg[S2S_CFG_SIZE] S2S_DMA_ALIGN;
 
 	S2S_Target targets[S2S_MAX_TARGETS];
 
@@ -36,6 +36,9 @@ typedef struct
 
 	uint8_t csd[16]; // Unparsed CSD
 	uint8_t cid[16]; // Unparsed CID
+
+	uint32_t lastPollMediaTime;
+
 } SdCard;
 
 extern SdCard sdCard; // TODO move to .c file

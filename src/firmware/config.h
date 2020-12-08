@@ -18,13 +18,16 @@
 #define S2S_Config_H
 
 #include "scsi2sd.h"
+#include "device.h"
 
 void s2s_configInit(S2S_BoardCfg* config);
 void s2s_debugInit(void);
 void s2s_configPoll(void);
-void s2s_configSave(int scsiId, uint16_t byesPerSector);
 
-const S2S_TargetCfg* s2s_getConfigByIndex(int index);
-const S2S_TargetCfg* s2s_getConfigById(int scsiId);
+extern const uint8_t DEFAULT_TARGET_CONFIG[128];
+
+// Optional static config
+extern uint8_t* __fixed_config;
+
 
 #endif

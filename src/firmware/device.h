@@ -31,6 +31,14 @@ typedef struct S2S_TargetStruct S2S_Target;
 struct S2S_TargetStateStruct;
 typedef struct S2S_TargetStateStruct S2S_TargetState;
 
+typedef enum
+{
+	MEDIA_STARTED = 1,     // Controlled via START STOP UNIT
+	MEDIA_PRESENT = 2,     // SD card is physically present
+	MEDIA_INITIALISED = 4, // SD card responded to init sequence
+	MEDIA_WP = 8           // Write-protect.
+} MEDIA_STATE;
+
 struct S2S_TargetStateStruct
 {
 	ScsiSense sense;
@@ -52,8 +60,6 @@ struct S2S_TargetStateStruct
 
 struct S2S_TargetStruct
 {
-	uint8_t id;
-
 	S2S_Device* device;
 	S2S_TargetCfg* cfg;
 
@@ -62,20 +68,28 @@ struct S2S_TargetStruct
 
 struct S2S_DeviceStruct
 {
+	void (*earlyInit)(S2S_Device* dev);
+
 	const S2S_BoardCfg* (*getBoardConfig)(S2S_Device* dev);
-	//const S2S_Target* (*findByScsiId)(S2S_Device* dev, int scsiId);
 	S2S_Target* (*getTargets)(S2S_Device* dev, int* count);
 
 	// Get the number of 512 byte blocks
 	uint32_t (*getCapacity)(S2S_Device* dev);
 
+	int (*pollMediaChange)(S2S_Device* dev);
+
+	void (*saveConfig)(S2S_Target* target);
+
+	MEDIA_STATE mediaState;
 };
 
-void s2s_DeviceGetBoardConfig(S2S_BoardCfg* config);
+int s2s_DeviceGetBoardConfig(S2S_BoardCfg* config);
 S2S_Target* s2s_DeviceFindByScsiId(int scsiId);
 
 S2S_Device* s2s_GetDevices(int* count);
 
+void s2s_deviceEarlyInit();
+int s2s_pollMediaChange();
 #endif
 
 

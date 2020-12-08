@@ -37,13 +37,10 @@
 
 #include <string.h>
 
-static const uint16_t FIRMWARE_VERSION = 0x0632;
-
-// Optional static config
-extern uint8_t* __fixed_config;
+static const uint16_t FIRMWARE_VERSION = 0x0640;
 
 // 1 flash row
-static const uint8_t DEFAULT_CONFIG[128] =
+const uint8_t DEFAULT_TARGET_CONFIG[128] =
 {
 	0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x3F, 0x00,
 	0x00, 0x02, 0x3F, 0x00, 0xFF, 0x00, 0x20, 0x63, 0x6F, 0x64, 0x65, 0x73,
@@ -90,40 +87,7 @@ void s2s_configInit(S2S_BoardCfg* config)
 {
 	usbInEpState = USB_IDLE;
 
-	if (memcmp(__fixed_config, "BCFG", 4) == 0)
-	{
-		// Use hardcoded config
-		memcpy(s2s_cfg, __fixed_config, S2S_CFG_SIZE);
-		memcpy(config, s2s_cfg, sizeof(S2S_BoardCfg));
-	}
-
-	else if ((blockDev.state & DISK_PRESENT) && sdCard.capacity)
-	{
-		int cfgSectors = (S2S_CFG_SIZE + 511) / 512;
-		BSP_SD_ReadBlocks_DMA(
-			(uint32_t*) &s2s_cfg[0],
-			(sdCard.capacity - cfgSectors) * 512ll,
-			512,
-			cfgSectors);
-
-		memcpy(config, s2s_cfg, sizeof(S2S_BoardCfg));
-
-		if (memcmp(config->magic, "BCFG", 4))
-		{
-			// Invalid SD card config, use default.
-			memset(&s2s_cfg[0], 0, S2S_CFG_SIZE);
-			memcpy(config, s2s_cfg, sizeof(S2S_BoardCfg));
-			memcpy(config->magic, "BCFG", 4);
-			config->selectionDelay = 255; // auto
-			config->flags6 = S2S_CFG_ENABLE_TERMINATOR;
-
-			memcpy(
-				&s2s_cfg[0] + sizeof(S2S_BoardCfg),
-				DEFAULT_CONFIG,
-				sizeof(S2S_TargetCfg));
-		}
-	}
-	else
+	if (!s2s_DeviceGetBoardConfig(config))
 	{
 		// No SD card, use existing config if valid
 		if (memcmp(config->magic, "BCFG", 4))
@@ -225,7 +189,7 @@ debugCommand()
 	response[23] = scsiDev.msgCount;
 	response[24] = scsiDev.cmdCount;
 	response[25] = scsiDev.watchdogTick;
-	response[26] = blockDev.state;
+	response[26] = 0; // OBSOLETE. Previously media state;
 	response[27] = scsiDev.lastSenseASC >> 8;
 	response[28] = scsiDev.lastSenseASC;
 	response[29] = *SCSI_STS_DBX & 0xff; // What we've read
@@ -434,40 +398,4 @@ void s2s_debugTimer()
 	}
 }
 
-
-
-// Public method for storing MODE SELECT results.
-void s2s_configSave(int scsiId, uint16_t bytesPerSector)
-{
-	S2S_TargetCfg* cfg = (S2S_TargetCfg*) s2s_getConfigById(scsiId);
-	cfg->bytesPerSector = bytesPerSector;
-
-	BSP_SD_WriteBlocks_DMA(
-		(uint32_t*) &s2s_cfg[0],
-		(sdCard.capacity - S2S_CFG_SIZE) * 512ll,
-		512,
-		(S2S_CFG_SIZE + 511) / 512);
-}
-
-
-const S2S_TargetCfg* s2s_getConfigByIndex(int i)
-{
-	return (const S2S_TargetCfg*)
-		(s2s_cfg + sizeof(S2S_BoardCfg) + (i * sizeof(S2S_TargetCfg)));
-}
-
-const S2S_TargetCfg* s2s_getConfigById(int scsiId)
-{
-	int i;
-	for (i = 0; i < S2S_MAX_TARGETS; ++i)
-	{
-		const S2S_TargetCfg* tgt = s2s_getConfigByIndex(i);
-		if ((tgt->scsiId & S2S_CFG_TARGET_ID_BITS) == scsiId)
-		{
-			return tgt;
-		}
-	}
-	return NULL;
-
-}
 

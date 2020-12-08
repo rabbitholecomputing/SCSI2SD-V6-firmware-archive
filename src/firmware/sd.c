@@ -31,24 +31,28 @@
 
 #include <string.h>
 
+static void sd_earlyInit(S2S_Device* dev);
 static const S2S_BoardCfg* sd_getBoardConfig(S2S_Device* dev);
-//static const S2S_TargetCfg* sd_findByScsiId(S2S_Device* dev, int scsiId);
 static S2S_Target* sd_getTargets(S2S_Device* dev, int* count);
 static uint32_t sd_getCapacity(S2S_Device* dev);
+static int sd_pollMediaChange(S2S_Device* dev);
+static void sd_saveConfig(S2S_Target* target);
 
 // Global
 SdCard sdCard S2S_DMA_ALIGN = {
 		{
+			sd_earlyInit,
 			sd_getBoardConfig,
-			//sd_findByScsiId,
 			sd_getTargets,
-			sd_getCapacity
+			sd_getCapacity,
+			sd_pollMediaChange,
+			sd_saveConfig
 		}
 };
 
 S2S_Device* sdDevice = &(sdCard.dev);
 
-static int sdCmdActive = 0;
+static int sdCmdActive = 0; // TODO MOVE to sdCard
 
 int
 sdReadDMAPoll(uint32_t remainingSectors)
@@ -160,7 +164,7 @@ static int sdDoInit()
 		memcpy(sdCard.csd, &SDCardInfo.SD_csd, sizeof(sdCard.csd));
 		memcpy(sdCard.cid, &SDCardInfo.SD_cid, sizeof(sdCard.cid));
 		sdCard.capacity = SDCardInfo.CardCapacity / SD_SECTOR_SIZE;
-		blockDev.state |= DISK_PRESENT | DISK_INITIALISED;
+		sdCard.dev.mediaState |= MEDIA_PRESENT | MEDIA_INITIALISED;
 		result = 1;
 
 		// SD Benchmark code
@@ -193,7 +197,7 @@ static int sdDoInit()
 	}
 
 //bad:
-	blockDev.state &= ~(DISK_PRESENT | DISK_INITIALISED);
+	sdCard.dev.mediaState &= ~(MEDIA_PRESENT | MEDIA_INITIALISED);
 
 	sdCard.capacity = 0;
 
@@ -211,7 +215,7 @@ int sdInit()
 
 	if (firstInit)
 	{
-		blockDev.state &= ~(DISK_PRESENT | DISK_INITIALISED);
+		sdCard.dev.mediaState &= ~(MEDIA_PRESENT | MEDIA_INITIALISED);
 		sdClear();
 		sdInitDMA();
 	}
@@ -221,7 +225,7 @@ int sdInit()
 		uint8_t cs = HAL_GPIO_ReadPin(nSD_CD_GPIO_Port, nSD_CD_Pin) ? 0 : 1;
 		uint8_t wp = HAL_GPIO_ReadPin(nSD_WP_GPIO_Port, nSD_WP_Pin) ? 0 : 1;
 
-		if (cs && !(blockDev.state & DISK_PRESENT))
+		if (cs && !(sdCard.dev.mediaState & MEDIA_PRESENT))
 		{
 			s2s_ledOn();
 
@@ -233,15 +237,15 @@ int sdInit()
 
 			if (sdDoInit())
 			{
-				blockDev.state |= DISK_PRESENT | DISK_INITIALISED;
+				sdCard.dev.mediaState |= MEDIA_PRESENT | MEDIA_INITIALISED;
 
 				if (wp)
 				{
-					blockDev.state |= DISK_WP;
+					sdCard.dev.mediaState |= MEDIA_WP;
 				}
 				else
 				{
-					blockDev.state &= ~DISK_WP;
+					sdCard.dev.mediaState &= ~MEDIA_WP;
 				}
 
 				// Always "start" the device. Many systems (eg. Apple System 7)
@@ -249,7 +253,7 @@ int sdInit()
 				// LOGICAL_UNIT_NOT_READY_INITIALIZING_COMMAND_REQUIRED sense
 				// code, even if they stopped it first with
 				// START STOP UNIT command.
-				blockDev.state |= DISK_STARTED;
+				sdCard.dev.mediaState |= MEDIA_STARTED;
 
 				result = 1;
 
@@ -268,11 +272,11 @@ int sdInit()
 				s2s_ledOff();
 			}
 		}
-		else if (!cs && (blockDev.state & DISK_PRESENT))
+		else if (!cs && (sdCard.dev.mediaState & MEDIA_PRESENT))
 		{
 			sdCard.capacity = 0;
-			blockDev.state &= ~DISK_PRESENT;
-			blockDev.state &= ~DISK_INITIALISED;
+			sdCard.dev.mediaState &= ~MEDIA_PRESENT;
+			sdCard.dev.mediaState &= ~MEDIA_INITIALISED;
 			int i;
 			for (i = 0; i < S2S_MAX_TARGETS; ++i)
 			{
@@ -287,22 +291,52 @@ int sdInit()
 	return result;
 }
 
+static void sd_earlyInit(S2S_Device* dev)
+{
+	SdCard* sdCardDevice = (SdCard*)dev;
+
+	for (int i = 0; i < S2S_MAX_TARGETS; ++i)
+	{
+		sdCardDevice->targets[i].device = dev;
+		sdCardDevice->targets[i].cfg = (const S2S_TargetCfg*)
+			(&(sdCardDevice->cfg[0]) + sizeof(S2S_BoardCfg) + (i * sizeof(S2S_TargetCfg)));
+	}
+	sdCardDevice->lastPollMediaTime = s2s_getTime_ms();
+
+	// Don't require the host to send us a START STOP UNIT command
+	sdCardDevice->dev.mediaState = MEDIA_STARTED;
+
+}
+
 static const S2S_BoardCfg* sd_getBoardConfig(S2S_Device* dev)
 {
 	SdCard* sdCardDevice = (SdCard*)dev;
 
-	if ((blockDev.state & DISK_PRESENT) && sdCardDevice->capacity)
+	if (memcmp(__fixed_config, "BCFG", 4) == 0)
+	{
+		// Use hardcoded config if available. Hardcoded config always refers
+		// to the SD card.
+		memcpy(&(sdCardDevice->cfg[0]), __fixed_config, S2S_CFG_SIZE);
+		return (S2S_BoardCfg*) &(sdCardDevice->cfg[0]);
+	}
+	else if ((sdCard.dev.mediaState & MEDIA_PRESENT) && sdCardDevice->capacity)
 	{
 		int cfgSectors = (S2S_CFG_SIZE + 511) / 512;
 		BSP_SD_ReadBlocks_DMA(
-			(uint32_t*) &(sdCardDevice->boardCfg[0]),
+			(uint32_t*) &(sdCardDevice->cfg[0]),
 			(sdCardDevice->capacity - cfgSectors) * 512ll,
 			512,
 			cfgSectors);
 
-		S2S_BoardCfg* cfg = (S2S_BoardCfg*) &(sdCardDevice->boardCfg[0]);
+		S2S_BoardCfg* cfg = (S2S_BoardCfg*) &(sdCardDevice->cfg[0]);
 		if (memcmp(cfg->magic, "BCFG", 4))
 		{
+			// Set a default Target disk config
+			memcpy(
+				&(sdCardDevice->cfg[0]) + sizeof(S2S_BoardCfg),
+				DEFAULT_TARGET_CONFIG,
+				sizeof(DEFAULT_TARGET_CONFIG));
+
 			return NULL;
 		}
 		else
@@ -314,7 +348,6 @@ static const S2S_BoardCfg* sd_getBoardConfig(S2S_Device* dev)
 	return NULL;
 }
 
-//static const S2S_TargetCfg* sd_findByScsiId(S2S_Device* dev, int scsiId)
 static S2S_Target* sd_getTargets(S2S_Device* dev, int* count)
 {
 	SdCard* sdCardDevice = (SdCard*)dev;
@@ -326,4 +359,30 @@ static uint32_t sd_getCapacity(S2S_Device* dev)
 {
 	SdCard* sdCardDevice = (SdCard*)dev;
 	return sdCardDevice->capacity;
+}
+
+static int sd_pollMediaChange(S2S_Device* dev)
+{
+	SdCard* sdCardDevice = (SdCard*)dev;
+	if (s2s_elapsedTime_ms(sdCardDevice->lastPollMediaTime) > 200)
+	{
+		sdCardDevice->lastPollMediaTime = s2s_getTime_ms();
+		return sdInit();
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+static void sd_saveConfig(S2S_Target* target)
+{
+	SdCard* sdCardDevice = (SdCard*)target->device;
+	target->cfg->bytesPerSector = target->state.bytesPerSector;
+
+	BSP_SD_WriteBlocks_DMA(
+		(uint32_t*) (&(sdCardDevice->cfg[0])),
+		(sdCardDevice->capacity - S2S_CFG_SIZE) * 512ll,
+		512,
+		(S2S_CFG_SIZE + 511) / 512);
 }
