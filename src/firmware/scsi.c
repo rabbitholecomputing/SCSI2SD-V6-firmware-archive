@@ -1152,6 +1152,8 @@ void scsiInit()
 
 			state->syncOffset = 0;
 			state->syncPeriod = 0;
+
+			state->bytesPerSector = targets[i].cfg->bytesPerSector;
 		}
 	}
 	firstInit = 0;

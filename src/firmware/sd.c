@@ -298,7 +298,7 @@ static void sd_earlyInit(S2S_Device* dev)
 	for (int i = 0; i < S2S_MAX_TARGETS; ++i)
 	{
 		sdCardDevice->targets[i].device = dev;
-		sdCardDevice->targets[i].cfg = (const S2S_TargetCfg*)
+		sdCardDevice->targets[i].cfg = (S2S_TargetCfg*)
 			(&(sdCardDevice->cfg[0]) + sizeof(S2S_BoardCfg) + (i * sizeof(S2S_TargetCfg)));
 	}
 	sdCardDevice->lastPollMediaTime = s2s_getTime_ms();
