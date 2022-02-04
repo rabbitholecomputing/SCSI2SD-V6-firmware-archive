@@ -366,6 +366,7 @@ static void process_Command()
 	else if (command == 0x12)
 	{
 		s2s_scsiInquiry();
+		scsiDev.target->syncNegotiationAttempted = 0;
 	}
 	else if (command == 0x03)
 	{
@@ -586,6 +587,7 @@ static void scsiReset()
 	{
 		scsiDev.targets[i].syncOffset = 0;
 		scsiDev.targets[i].syncPeriod = 0;
+		scsiDev.targets[i].syncNegotiationAttempted = 0;
 	}
 	scsiDev.minSyncPeriod = 0;
 
@@ -746,6 +748,20 @@ static void process_SelectionPhase()
 	scsiDev.selFlag = 0;
 }
 
+static void sendSyncMessage()
+{
+	scsiEnterPhase(MESSAGE_IN);
+	uint8_t SDTR[] = {0x01, 0x03, 0x01, scsiDev.target->syncPeriod, scsiDev.target->syncOffset};
+	scsiWrite(SDTR, sizeof(SDTR));
+	scsiDev.needSyncNegotiationAck = 1; // Check if this message is rejected.
+	scsiDev.sdUnderrunCount = 0;  // reset counter, may work now.
+
+	// Set to the theoretical speed, then adjust if we measure lower
+	// actual speeds.
+	scsiDev.hostSpeedKBs = s2s_getScsiRateKBs();
+	scsiDev.hostSpeedMeasured = 0;
+}
+
 static void process_MessageOut()
 {
 	int wasNeedSyncNegotiationAck = scsiDev.needSyncNegotiationAck;
@@ -797,6 +813,7 @@ static void process_MessageOut()
 		// Cancel any sync negotiation
 		scsiDev.target->syncOffset = 0;
 		scsiDev.target->syncPeriod = 0;
+		scsiDev.target->syncNegotiationAttempted = 0;
 
 		enter_BusFree();
 	}
@@ -892,6 +909,7 @@ static void process_MessageOut()
 			// SDTR becomes invalidated.
 			scsiDev.target->syncOffset = 0;
 			scsiDev.target->syncPeriod = 0;
+			scsiDev.targets[i].syncNegotiationAttempted = 0;
 		}
 		else if (extmsg[0] == 1 && msgLen == 3) // Synchronous data request
 		{
@@ -900,6 +918,11 @@ static void process_MessageOut()
 
 			int transferPeriod = extmsg[1];
 			int offset = extmsg[2];
+
+			if (offset > 0)
+			{
+				scsiDev.targets[i].syncNegotiationAttempted = 1;
+			}
 
 			if ((
 					(transferPeriod > 0) &&
@@ -960,16 +983,7 @@ static void process_MessageOut()
 				scsiDev.target->syncOffset != oldOffset ||
 				!wasNeedSyncNegotiationAck) // Don't get into infinite loops negotiating.
 			{
-				scsiEnterPhase(MESSAGE_IN);
-				uint8_t SDTR[] = {0x01, 0x03, 0x01, scsiDev.target->syncPeriod, scsiDev.target->syncOffset};
-				scsiWrite(SDTR, sizeof(SDTR));
-				scsiDev.needSyncNegotiationAck = 1; // Check if this message is rejected.
-				scsiDev.sdUnderrunCount = 0;  // reset counter, may work now.
-
-				// Set to the theoretical speed, then adjust if we measure lower
-				// actual speeds.
-				scsiDev.hostSpeedKBs = s2s_getScsiRateKBs();
-				scsiDev.hostSpeedMeasured = 0;
+				sendSyncMessage();
 			}
 		}
 		else
@@ -1058,6 +1072,19 @@ void scsiPoll(void)
 		if (scsiDev.atnFlag)
 		{
 			process_MessageOut();
+		}
+		else if (!scsiDev.target->syncNegotiationAttempted && scsiDev.target->syncOffset == 0 &&
+			scsiDev.compatMode >= COMPAT_SCSI2)// &&
+			//(scsiDev.boardCfg.scsiSpeed == S2S_CFG_SPEED_NoLimit ||
+			//	scsiDev.boardCfg.scsiSpeed >= S2S_CFG_SPEED_SYNC_5))
+		{
+			scsiDev.target->syncPeriod = 25;
+			scsiDev.target->syncOffset= 15;
+			
+			scsiDev.target->syncNegotiationAttempted = 1;
+			sendSyncMessage();
+			s2s_delay_us(2);
+			scsiDev.atnFlag |= scsiStatusATN();
 		}
 		else
 		{
@@ -1164,6 +1191,7 @@ void scsiInit()
 
 		scsiDev.targets[i].syncOffset = 0;
 		scsiDev.targets[i].syncPeriod = 0;
+		scsiDev.targets[i].syncNegotiationAttempted = 0;
 
 		// Always "start" the device. Many systems (eg. Apple System 7)
 		// won't respond properly to

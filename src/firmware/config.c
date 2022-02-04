@@ -229,9 +229,9 @@ debugCommand()
     response[15] = scsiDev.lastSense;
     response[16] = scsiDev.phase;
     response[17] = *SCSI_STS_SCSI;
-    response[18] = scsiDev.target != NULL ? scsiDev.target->syncOffset : 0;
-    response[19] = scsiDev.target != NULL ? scsiDev.target->syncPeriod : 0;
-    response[20] = scsiDev.minSyncPeriod;
+    response[18] = scsiDev.targets[0].syncOffset;// != NULL ? scsiDev.target->syncOffset : 0;
+    response[19] = scsiDev.targets[1].syncOffset;//!= NULL ? scsiDev.target->syncPeriod : 0;
+    response[20] = 0xAA;
     response[21] = scsiDev.rstCount;
     response[22] = scsiDev.selCount;
     response[23] = scsiDev.msgCount;
